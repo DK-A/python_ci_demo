@@ -1,0 +1,64 @@
+name: PR Review Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate Report
+        run: |
+          FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | wc -l)
+
+          ADDED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD | awk '{a+=$1} END {print a}')
+          REMOVED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD | awk '{a+=$2} END {print a}')
+
+          echo "# PR Review Summary" > report.md
+          echo "" >> report.md
+          echo "- Files Changed: $FILES" >> report.md
+          echo "- Lines Added: $ADDED" >> report.md
+          echo "- Lines Removed: $REMOVED" >> report.md
+          echo "" >> report.md
+
+          echo "## TODO / FIXME" >> report.md
+
+          git diff --name-only origin/${{ github.base_ref }}...HEAD | while read file
+          do
+            grep -nE "TODO|FIXME" "$file" >> report.md || true
+          done
+
+          echo "" >> report.md
+          echo "## Diff Statistics" >> report.md
+          echo '```' >> report.md
+          git diff --stat origin/${{ github.base_ref }}...HEAD >> report.md
+          echo '```' >> report.md
+
+      - name: Create or Update Comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat report.md)
+
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments)
+
+          COMMENT_ID=$(echo "$COMMENTS" | jq '.[] | select(.body | contains("PR Review Summary")) | .id' | head -n1)
+
+          if [ -z "$COMMENT_ID" ]; then
+            gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+              -f body="$BODY"
+          else
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
+              -X PATCH \
+              -f body="$BODY"
+          fi
